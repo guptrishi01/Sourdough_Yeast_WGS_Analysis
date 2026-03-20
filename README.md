@@ -118,43 +118,147 @@ to produce a final, annotated variant callset. The following flowchart describes
 raw sequencing reads into a filtered, annotated variant callset.
 
 ```mermaid
+%%{init: {'flowchart': {'nodeSpacing': 80, 'rankSpacing': 100, 'wrappingWidth': 900}, 'themeVariables': {'fontSize': '18px', 'fontFamily': 'arial'}}}%%
 flowchart TD
-    A["📂 Raw Input\n─────────────────\nPaired-end FASTQ files\n(_R1.fastq.gz + _R2.fastq.gz)\nfor each sample\n(46 SD + 26 NAT + commercial)"]
 
-    A --> B["🔍 Quality Control\n─────────────────\nTool: FastQC\nScript: sample_fastqc.sh\n+ sample_fastq_arrayjob.sh\n─────────────────\nOutput: Per-sample QC\nreports (HTML + zip)"]
+    A["📂 Raw Input
+    ───────────────────────────────
+    Paired-end FASTQ files  _R1.fastq.gz + _R2.fastq.gz
+    46 Sourdough + 26 Nature + Commercial Samples"]
 
-    B --> C["🗺️ Read Mapping\n─────────────────\nTool: BWA-MEM\nScript: map_filter_pereads.sh\n─────────────────\nMap reads to S. cerevisiae\nreference genome (newref.fasta)\nOutput: SAM file per sample"]
+    B["🔍 Step 1 — Quality Control
+    ───────────────────────────────
+    Tool: FastQC
+    Scripts: sample_fastqc.sh + sample_fastq_arrayjob.sh
+    Output: Per-sample QC reports — HTML + zip — for all runs"]
 
-    C --> D["⚙️ BAM Processing\n─────────────────\nTools: SAMtools + Picard\nScript: map_filter_pereads.sh\n─────────────────\n1. SAMtools view: SAM → BAM\n2. SAMtools sort + index\n3. SAMtools flagstat (QC stats)\n4. Picard MarkDuplicates\n5. Picard AddOrReplaceReadGroups\n6. SAMtools view: filter BAM\n   (-q 20, remove unmapped/\n   secondary/QC-failed reads)\n7. SAMtools sort + index\n─────────────────\nOutput: [sample]_filtered.sorted.bam"]
+    C["🗺️ Step 2 — Read Mapping
+    ───────────────────────────────
+    Tool: BWA-MEM
+    Script: map_filter_pereads.sh
+    Map paired-end reads to S. cerevisiae reference genome — newref.fasta
+    Output: SAM file per sample"]
 
-    D --> E["🧬 Variant Calling\n─────────────────\nTool: GATK HaplotypeCaller\nScript: call_variants.sh\n+ calling_variants_arrayjob.sh\n─────────────────\nRun in GVCF mode (-ERC GVCF)\non each filtered BAM\n─────────────────\nOutput: [sample].g.vcf.gz\n(one per sample)"]
+    D["⚙️ Step 3 — BAM Processing
+    ───────────────────────────────
+    Tools: SAMtools + Picard     Script: map_filter_pereads.sh
+    1. SAMtools view — SAM to BAM
+    2. SAMtools sort + index
+    3. SAMtools flagstat — alignment QC statistics
+    4. Picard MarkDuplicates — flag PCR duplicates
+    5. Picard AddOrReplaceReadGroups
+    6. SAMtools view — filter BAM — mapQ 20 — remove unmapped, secondary, QC-fail
+    7. SAMtools sort + index
+    Output: sample_filtered.sorted.bam per sample"]
 
-    E --> F["🗄️ Consolidate GVCFs\n─────────────────\nTool: GATK GenomicsDBImport\nScript: genomicsDBImport.sh\n─────────────────\nCreate TSV sample map\nConsolidate all GVCFs into\na GenomicsDB workspace\n(run per chromosome)\n─────────────────\nOutput: [CHROM]_gdb/\n(one workspace per chromosome)"]
+    E["🧬 Step 4 — Per-Sample Variant Calling
+    ───────────────────────────────
+    Tool: GATK HaplotypeCaller
+    Scripts: call_variants.sh + calling_variants_arrayjob.sh
+    Run in GVCF mode — ERC GVCF — on each filtered BAM
+    Output: sample.g.vcf.gz — one GVCF per sample"]
 
-    F --> G["🔗 Joint Genotyping\n─────────────────\nTool: GATK GenotypeGVCFs\nScript: genotypeGVCF.sh\n─────────────────\nJointly genotype all samples\nfrom GenomicsDB workspace\n(run per chromosome)\n─────────────────\nOutput: [CHROM]_genotyped_variants.vcf\n(one per chromosome)"]
+    F["🗄️ Step 5 — Consolidate GVCFs
+    ───────────────────────────────
+    Tool: GATK GenomicsDBImport     Script: genomicsDBImport.sh
+    Create TSV sample map — consolidate all GVCFs per chromosome
+    into a shared GenomicsDB workspace
+    Output: CHROM_gdb workspace — one per chromosome"]
 
-    G --> H["📦 Merge Chromosomal VCFs\n─────────────────\nTool: Picard GatherVcfs\nScript: gatherVCFs.sh\n─────────────────\nCombine all 16 chromosome VCFs\ninto a single callset\n─────────────────\n⭐ Output: all_chromosomes_combined.vcf"]
+    G["🔗 Step 6 — Joint Genotyping
+    ───────────────────────────────
+    Tool: GATK GenotypeGVCFs     Script: genotypeGVCF.sh
+    Jointly genotype all samples from GenomicsDB workspace
+    Run per chromosome — leverages cohort-wide information
+    Output: CHROM_genotyped_variants.vcf — one per chromosome"]
 
-    H --> I["🚦 Hard Filter Variants\n─────────────────\nTool: GATK VariantFiltration\nScript: variantFiltration.sh\n─────────────────\nFilters applied:\n• QD < 2.0\n• FS > 60.0\n• SOR > 3.0\n• MQ < 50.0\n• MQRankSum < -5.0\n• ReadPosRankSum < -4.0\nThen: grep PASS only\n─────────────────\nOutput: new_filtered_variants.vcf"]
+    H["📦 Step 7 — Merge Chromosomal VCFs
+    ───────────────────────────────
+    Tool: Picard GatherVcfs     Script: gatherVCFs.sh
+    Combine all 16 per-chromosome genotyped VCFs into one cohort-wide callset
+    ⭐ Output: all_chromosomes_combined.vcf"]
 
-    I --> J["🧹 Filter Ancestral Variants\n─────────────────\nTools: bcftools + htslib\nScript: subset_filter_variants.sh\n─────────────────\n1. bgzip + index VCF\n2. bcftools view: split into\n   SD ancestor, NAT ancestor,\n   SD descendants, NAT descendants\n3. bcftools isec: remove variants\n   shared between ancestor\n   and descendants\n─────────────────\nOutput: Variants private to\nSD evolved + NAT evolved clones"]
+    I["🚦 Step 8 — Hard Filter Variants
+    ───────────────────────────────
+    Tool: GATK VariantFiltration     Script: variantFiltration.sh
+    QD less than 2.0 — FS greater than 60.0 — SOR greater than 3.0
+    MQ less than 50.0 — MQRankSum less than -5.0 — ReadPosRankSum less than -4.0
+    grep PASS to retain only passing variants
+    Output: new_filtered_variants.vcf"]
 
-    J --> K["🏷️ Variant Annotation\n─────────────────\nTool: SnpEff\nScript: variantAnnotation.sh\n─────────────────\nAnnotate functional effects\nof variants (missense, synonymous,\nstop gained, etc.)\n─────────────────\nOutput: Annotated VCF\n(SD private + NAT private)"]
+    J["🧹 Step 9 — Filter Ancestral Variants
+    ───────────────────────────────
+    Tools: bcftools + htslib     Script: subset_filter_variants.sh
+    bgzip + index VCF
+    bcftools view — split into SD ancestor, NAT ancestor, SD descendants, NAT descendants
+    bcftools isec — remove variants shared between ancestor and descendants
+    Output: Variants private to SD evolved clones + NAT evolved clones"]
 
-    K --> L["🔎 Annotation Filtering\n─────────────────\nTool: SnpSift\nScript: variantSnpSiftFiltering.sh\n─────────────────\nFilter for variants of interest\nbased on functional annotation\n(e.g., HIGH/MODERATE impact)\n─────────────────\nOutput: Final filtered,\nannotated variant sets"]
+    K["🏷️ Step 10 — Variant Annotation
+    ───────────────────────────────
+    Tool: SnpEff     Script: variantAnnotation.sh
+    Annotate functional effects — missense, synonymous, stop gained, frameshift, etc.
+    Output: Functionally annotated VCF — SD private variants + NAT private variants"]
 
-    L --> M1["📊 LOH Analysis\n─────────────────\nInput: all_chromosomes_combined.vcf\nNotebooks: Calculate_LOHet.ipynb\n           Plotting_ROHet.ipynb\n─────────────────\nOutput: LOH heatmaps,\nancestor vs. descendant\nheterozygosity plots"]
+    L["🔎 Step 11 — Annotation Filtering
+    ───────────────────────────────
+    Tool: SnpSift     Script: variantSnpSiftFiltering.sh
+    Filter annotated variants by functional impact — HIGH and MODERATE priority
+    Output: Final filtered and annotated variant sets of interest"]
 
-    L --> M2["🌳 Phylogeny & PCA\n─────────────────\nInput: all_chromosomes_combined.vcf\n        new_filtered_variants.vcf\nScripts: SNPRelate.R, PCA.py\n─────────────────\nOutput: Neighbor-joining tree,\ncircular tree, annotated tree,\nPCA plot"]
+    M1["📊 LOH Analysis
+    ───────────────────────────────
+    Input: all_chromosomes_combined.vcf
+    Notebooks: Calculate_LOHet.ipynb + Plotting_ROHet.ipynb
+    Output: LOH heatmaps + ancestor vs descendant heterozygosity plots"]
 
-    L --> M3["📈 CNV Analysis\n─────────────────\nInput: Coverage files,\n        all_chromosomes_combined.vcf\nNotebooks: CNV_Chromosomal_Evaluation\n            CNV_Heatmap_Plotting\n            Ancestor_Descendant_CNV\n─────────────────\nOutput: CNV heatmaps, BED files,\ngain/loss tables, coverage plots"]
+    M2["🌳 Phylogeny and PCA
+    ───────────────────────────────
+    Input: all_chromosomes_combined.vcf + new_filtered_variants.vcf
+    Scripts: SNPRelate.R + PCA.py
+    Output: Neighbor-joining tree, circular tree, annotated tree, PCA plot"]
 
-    style A fill:#4A90D9,color:#fff,stroke:#2c5f8a
-    style H fill:#27AE60,color:#fff,stroke:#1a7a42
+    M3["📈 CNV Analysis
+    ───────────────────────────────
+    Input: Per-sample coverage files + all_chromosomes_combined.vcf
+    Notebooks: CNV_Chromosomal_Evaluation + CNV_Heatmap_Plotting + Ancestor_Descendant_CNV
+    Output: CNV heatmaps, BED files, gain and loss tables, coverage plots"]
+
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+    E --> F
+    F --> G
+    G --> H
+    H --> I
+    I --> J
+    J --> K
+    K --> L
+    K --> M1
+    K --> M2
+    K --> M3
+
+    classDef default fill:#2E86AB,color:#fff,stroke:#1a5c7a,padding:20px
+    classDef highlight fill:#27AE60,color:#fff,stroke:#1a7a42,padding:20px
+    classDef downstream fill:#8E44AD,color:#fff,stroke:#5d2d73,padding:20px
+    classDef annotation fill:#16A085,color:#fff,stroke:#0e6b59,padding:20px
+
+    style A fill:#2E86AB,color:#fff,stroke:#1a5c7a
+    style B fill:#2E86AB,color:#fff,stroke:#1a5c7a
+    style C fill:#2E86AB,color:#fff,stroke:#1a5c7a
+    style D fill:#2E86AB,color:#fff,stroke:#1a5c7a
+    style E fill:#2E86AB,color:#fff,stroke:#1a5c7a
+    style F fill:#2E86AB,color:#fff,stroke:#1a5c7a
+    style G fill:#2E86AB,color:#fff,stroke:#1a5c7a
+    style H fill:#2E86AB,color:#fff,stroke:#1a5c7a
+    style I fill:#2E86AB,color:#fff,stroke:#1a5c7a
+    style J fill:#2E86AB,color:#fff,stroke:#1a5c7a
+    style K fill:#16A085,color:#fff,stroke:#0e6b59
+    style L fill:#E67E22,color:#fff,stroke:#a85515
     style M1 fill:#8E44AD,color:#fff,stroke:#5d2d73
     style M2 fill:#8E44AD,color:#fff,stroke:#5d2d73
     style M3 fill:#8E44AD,color:#fff,stroke:#5d2d73
-    style L fill:#E67E22,color:#fff,stroke:#a85515
 ```
 
 ### Tools Used
